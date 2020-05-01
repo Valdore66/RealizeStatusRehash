@@ -1,0 +1,77 @@
+on('ready',() => {
+    const tokenMarkers = JSON.parse(Campaign().get("token_markers"));
+    const markerOnValue = 1;							
+    for (let i = 0; i<tokenMarkers.length; i++) {
+        const markers=[(tokenMarkers[i].name)];
+        const markerAttrRegexp=/^sm_+(tokenMarkers[i].name)$/;
+        
+    const getOrCreateAttr = (()=>{
+        let cache = findObjs({ type: 'attribute'})
+            .filter( a => markerAttrRegexp.test(a.get('name')))
+            .reduce( (m,a) => {
+                const cid=a.get('characterid');
+                m[cid]=m[cid]||{};
+                m[cid][a.get('name')]=a;
+                return m;
+            },{});
+
+        return (p)=>{
+            if(!cache.hasOwnProperty(p.characterid) || !cache[p.characterid].hasOwnProperty(p.name)){
+                cache[p.characterid]=cache[p.characterid]||{};
+                cache[p.characterid][p.name] = createObj('attribute',p);
+            }
+            return cache[p.characterid][p.name];
+        };
+
+    })();
+    
+    const setStatus = (cid, s, v) => getOrCreateAttr({
+        type: 'attribute',
+        name: `sm_${s}`,
+        characterid: cid
+    }).set('current',parseInt(v,10)||0);
+        
+    const handleStatusMarkerChange = _.debounce((obj,prev) => {
+        if(obj.get('represents').length) {
+            let character = getObj('character',obj.get('represents'));
+            if(character && character.get('controlledby').length){
+                let sm = obj.get('statusmarkers');
+                if(sm!==prev.statusmarkers){
+                    prev.statusmarkers.split(/,/)
+                        .map((s)=>s.split(/@/))
+                        .forEach( s => setStatus(character.id,s[0]))
+                        ;
+                    sm.split(/,/)
+                        .map((s)=>s.split(/@/))
+                        .forEach( s => setStatus(character.id,s[0],parseInt(s[1],10)||markerOnValue))
+                        ;
+                }
+            }
+        }
+    },10);
+
+    on('change:graphic',handleStatusMarkerChange);
+
+    /* global TokenMod */
+    if('undefined' !== typeof TokenMod && TokenMod.ObserveTokenChange){
+        TokenMod.ObserveTokenChange(handleStatusMarkerChange);
+    }
+
+
+    const workQueue = findObjs({ type: 'character' })
+        .filter( c => c.get('controlledby').length )
+        .reduce( (m,c) => [...m, ...markers.map( s => ({characterid: c.id, name: `sm_${s}`, current: 0}) )], []);
+
+    log(`RealizeStatusmarkers: Initializing attributes: ${workQueue.length}`);
+    const drainQueue = () => {
+        let prop = workQueue.shift();
+        if(prop){
+            getOrCreateAttr(prop);
+            setTimeout(drainQueue,0);
+        } else {
+            log(`RealizeStatusmarkers: Finished initializing attributes.`);
+        }
+    };
+    drainQueue();
+};
+});
